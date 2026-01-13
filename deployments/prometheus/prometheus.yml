@@ -1,8 +1,42 @@
-    global:
-      scrape_interval: 3s
+# Prometheus Configuration
+# Scrape metrics from Nginx and API services
 
-    scrape_configs:
-      - job_name: 'nginx-exporter'
-        static_configs:
-          - targets: ['nginx_exporter:9113']
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'sentiment-api-monitor'
+
+# Scrape configurations
+scrape_configs:
+  # Nginx metrics (stub_status)
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:80']
+    metrics_path: '/nginx_status'
+    scheme: 'http'
+
+  # API v1 metrics
+  - job_name: 'api-v1'
+    static_configs:
+      - targets:
+        - 'api-v1-1:8000'
+        - 'api-v1-2:8000'
+        - 'api-v1-3:8000'
+    metrics_path: '/metrics'
+    scheme: 'http'
+
+  # API v2 metrics
+  - job_name: 'api-v2'
+    static_configs:
+      - targets: ['api-v2:8000']
+    metrics_path: '/metrics'
+    scheme: 'http'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+
     
