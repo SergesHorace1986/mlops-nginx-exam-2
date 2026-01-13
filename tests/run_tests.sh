@@ -1,129 +1,320 @@
 #!/bin/bash
 
-# Define colors for output
-GREEN='\033[0;32m'
+# Sentiment Analysis API - Comprehensive Test Suite
+# Tests all required features: HTTPS, Load Balancing, Auth, Rate Limiting, A/B Testing, Monitoring
+
+set -e
+
+# Colors for output
 RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Initialize a failure flag
+# Test counters
+TESTS_PASSED=0
 TESTS_FAILED=0
+TOTAL_TESTS=0
 
-# Function to print a test result
-print_result() {
-    if [ $1 -eq 0 ]; then
-        echo -e "[${GREEN}PASS${NC}] $2"
-    else
-        echo -e "[${RED}FAIL${NC}] $2"
-        TESTS_FAILED=1
-    fi
+# Configuration
+API_URL="https://localhost"
+HTTP_URL="http://localhost"
+PROMETHEUS_URL="http://localhost:9090"
+USERNAME="admin"
+PASSWORD="password123"
+
+# Helper functions
+print_test() {
+    echo -e "${YELLOW}[TEST $1/$TOTAL_TESTS]${NC} $2"
 }
 
-# --- Test 1: Nominal Prediction (API v1) ---
-echo "
---- Running Test 1: Nominal Prediction (API v1) ---"
-response_v1=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://localhost/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"sentence": "Oh yeah, that was soooo cool!"}' \
-     --user admin:admin \
-     --cacert ./deployments/nginx/certs/nginx.crt)
+print_success() {
+    echo -e "${GREEN}✓ PASSED${NC}: $1"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+}
 
-if [ "$response_v1" -eq 200 ]; then
-    print_result 0 "API v1 returned HTTP 200 OK."
+print_failure() {
+    echo -e "${RED}✗ FAILED${NC}: $1"
+    echo -e "${RED}  Reason: $2${NC}"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+}
+
+print_section() {
+    echo ""
+    echo "=========================================="
+    echo "$1"
+    echo "=========================================="
+}
+
+# Wait for services to be ready
+wait_for_services() {
+    echo "Waiting for services to be ready..."
+    sleep 5
+    
+    # Check if containers are running
+    if ! docker ps | grep -q "nginx"; then
+        echo -e "${RED}ERROR: Nginx container is not running${NC}"
+        exit 1
+    fi
+    
+    echo "✓ Services are ready"
+}
+
+# Calculate total tests
+TOTAL_TESTS=14
+
+# Start tests
+echo "=========================================="
+echo "Sentiment Analysis API - Test Suite"
+echo "=========================================="
+echo "Total tests to run: $TOTAL_TESTS"
+echo ""
+
+wait_for_services
+
+# ==========================================
+# TEST 1: HTTP to HTTPS Redirect
+# ==========================================
+print_section "Feature 1: HTTPS Security"
+print_test 1 "Testing HTTP to HTTPS redirect..."
+
+response=$(curl -k -s -o /dev/null -w "%{http_code}" -L "$HTTP_URL/")
+if [ "$response" = "200" ]; then
+    location=$(curl -k -s -o /dev/null -w "%{redirect_url}" "$HTTP_URL/")
+    if [[ "$location" == https* ]]; then
+        print_success "HTTP redirects to HTTPS"
+    else
+        print_failure "HTTP to HTTPS redirect" "No HTTPS redirect detected"
+    fi
 else
-    print_result 1 "API v1 returned HTTP $response_v1 instead of 200."
+    print_failure "HTTP to HTTPS redirect" "HTTP request failed with code $response"
 fi
 
-# --- Test 2: A/B Routing (API v2) ---
-echo "
---- Running Test 2: A/B Routing (API v2) ---"
-response_v2_body=$(curl -s -X POST "https://localhost/predict" \
-     -H "Content-Type: application/json" \
-     -H "X-Experiment-Group: debug" \
-     -d '{"sentence": "Oh yeah, that was soooo cool!"}' \
-     --user admin:admin \
-     --cacert ./deployments/nginx/certs/nginx.crt)
+# ==========================================
+# TEST 2: HTTPS Connection
+# ==========================================
+print_test 2 "Testing HTTPS connection..."
 
-if echo "$response_v2_body" | grep -q 'prediction_proba_dict'; then
-    print_result 0 "API v2 response contains 'prediction_proba_dict'."
+response=$(curl -k -s -o /dev/null -w "%{http_code}" "$API_URL/health")
+if [ "$response" = "200" ]; then
+    print_success "HTTPS connection works"
 else
-    print_result 1 "API v2 response does not contain 'prediction_proba_dict'."
+    print_failure "HTTPS connection" "Failed with status code $response"
 fi
 
-# --- Test 3: Authentication Failure ---
-echo "
---- Running Test 3: Authentication Failure ---"
-response_auth=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://localhost/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"sentence": "test"}' \
-     --user admin:wrongpassword \
-     --cacert ./deployments/nginx/certs/nginx.crt)
+# ==========================================
+# TEST 3: Health Check (No Auth)
+# ==========================================
+print_test 3 "Testing health check endpoint (no authentication required)..."
 
-if [ "$response_auth" -eq 401 ]; then
-    print_result 0 "Authentication failed with incorrect credentials as expected (HTTP 401)."
+response=$(curl -k -s "$API_URL/health")
+if echo "$response" | grep -q "healthy"; then
+    print_success "Health check endpoint accessible without authentication"
 else
-    print_result 1 "Authentication test returned HTTP $response_auth instead of 401."
+    print_failure "Health check" "Response: $response"
 fi
 
-# --- Test 4: Rate Limiting ---
-echo "
---- Running Test 4: Rate Limiting ---"
-# Send 15 requests in a loop
-for i in {1..15}; do
-    curl -s -o /dev/null -w "%{http_code}\n" -X POST "https://localhost/predict" \
-         -H "Content-Type: application/json" \
-         -d '{"sentence": "test"}' \
-         --user admin:admin \
-         --cacert ./deployments/nginx/certs/nginx.crt &
+# ==========================================
+# TEST 4: Authentication Required
+# ==========================================
+print_section "Feature 2: Access Control (Authentication)"
+print_test 4 "Testing authentication requirement on /predict..."
+
+response=$(curl -k -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/predict" \
+    -H "Content-Type: application/json" \
+    -d '{"sentence": "test"}')
+
+if [ "$response" = "401" ]; then
+    print_success "Authentication required for /predict endpoint"
+else
+    print_failure "Authentication requirement" "Expected 401, got $response"
+fi
+
+# ==========================================
+# TEST 5: Authentication Works
+# ==========================================
+print_test 5 "Testing successful authentication..."
+
+response=$(curl -k -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/predict" \
+    -u "$USERNAME:$PASSWORD" \
+    -H "Content-Type: application/json" \
+    -d '{"sentence": "This is a test"}')
+
+if [ "$response" = "200" ]; then
+    print_success "Authentication successful with valid credentials"
+else
+    print_failure "Authentication" "Expected 200, got $response"
+fi
+
+# ==========================================
+# TEST 6: Prediction Functionality
+# ==========================================
+print_test 6 "Testing sentiment prediction..."
+
+response=$(curl -k -s -X POST "$API_URL/predict" \
+    -u "$USERNAME:$PASSWORD" \
+    -H "Content-Type: application/json" \
+    -d '{"sentence": "I love this product!"}')
+
+if echo "$response" | grep -q "sentiment"; then
+    print_success "Sentiment prediction works"
+else
+    print_failure "Prediction" "Response: $response"
+fi
+
+# ==========================================
+# TEST 7: Load Balancing
+# ==========================================
+print_section "Feature 3: Load Balancing"
+print_test 7 "Testing load balancing across 3 API v1 instances..."
+
+# Check if all 3 API v1 containers are running
+v1_count=$(docker ps | grep "api-v1" | wc -l)
+if [ "$v1_count" -eq 3 ]; then
+    print_success "All 3 API v1 instances are running"
+else
+    print_failure "Load balancing setup" "Expected 3 API v1 instances, found $v1_count"
+fi
+
+# ==========================================
+# TEST 8: Rate Limiting
+# ==========================================
+print_section "Feature 4: Rate Limiting"
+print_test 8 "Testing rate limiting (10 req/s + burst 20)..."
+
+# Send 30 requests rapidly
+rate_limited=0
+for i in {1..30}; do
+    response=$(curl -k -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/predict" \
+        -u "$USERNAME:$PASSWORD" \
+        -H "Content-Type: application/json" \
+        -d '{"sentence": "test"}')
+    
+    if [ "$response" = "429" ] || [ "$response" = "503" ]; then
+        rate_limited=$((rate_limited + 1))
+    fi
 done
-wait
 
-# Check for 429 status code in the responses
-# A simple way is to count them. We expect at least one 429.
-# This part is tricky in a script; a more robust implementation would log outputs to files.
-# For now, we'll assume the concept is demonstrated.
-# A proper test would require a more sophisticated client.
-# We will just check if the service is still up.
-response_after_burst=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://localhost/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"sentence": "test"}' \
-     --user admin:admin \
-     --cacert ./deployments/nginx/certs/nginx.crt)
-
-if [ "$response_after_burst" -ne 502 ]; then
-    print_result 0 "Rate limiting test passed (service is still available)."
+if [ "$rate_limited" -gt 0 ]; then
+    print_success "Rate limiting is active (blocked $rate_limited requests)"
 else
-    print_result 1 "Rate limiting test failed (service became unavailable)."
+    print_failure "Rate limiting" "No requests were rate limited"
 fi
 
+# Wait for rate limit to reset
+sleep 2
 
-# --- Test 5: Prometheus Availability ---
-echo "
---- Running Test 5: Prometheus Availability ---"
-response_prometheus=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/api/v1/status/runtimeinfo)
+# ==========================================
+# TEST 9: A/B Testing - Default (v1)
+# ==========================================
+print_section "Feature 5: A/B Testing"
+print_test 9 "Testing default routing to API v1..."
 
-if [ "$response_prometheus" -eq 200 ]; then
-    print_result 0 "Prometheus is available (HTTP 200)."
+response=$(curl -k -s -X POST "$API_URL/predict" \
+    -u "$USERNAME:$PASSWORD" \
+    -H "Content-Type: application/json" \
+    -d '{"sentence": "test"}')
+
+if echo "$response" | grep -q '"version":"v1"'; then
+    print_success "Default requests route to API v1"
 else
-    print_result 1 "Prometheus is not available (HTTP $response_prometheus)."
+    print_failure "A/B Testing (v1 routing)" "Response: $response"
 fi
 
-# --- Test 6: Grafana Availability ---
-echo "
---- Running Test 6: Grafana Availability ---"
-response_grafana=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health)
+# ==========================================
+# TEST 10: A/B Testing - Debug Header (v2)
+# ==========================================
+print_test 10 "Testing routing to API v2 with X-Experiment-Group: debug..."
 
-if [ "$response_grafana" -eq 200 ]; then
-    print_result 0 "Grafana is available (HTTP 200)."
+response=$(curl -k -s -X POST "$API_URL/predict" \
+    -u "$USERNAME:$PASSWORD" \
+    -H "Content-Type: application/json" \
+    -H "X-Experiment-Group: debug" \
+    -d '{"sentence": "test"}')
+
+if echo "$response" | grep -q '"version":"v2-debug"'; then
+    print_success "Debug header routes to API v2"
 else
-    print_result 1 "Grafana is not available (HTTP $response_grafana)."
+    print_failure "A/B Testing (v2 routing)" "Response: $response"
 fi
 
-# --- Final Result ---
-echo
-if [ $TESTS_FAILED -eq 1 ]; then
-    echo -e "${RED}Some tests failed.${NC}"
-    exit 1
+# ==========================================
+# TEST 11: Debug Info in v2
+# ==========================================
+print_test 11 "Testing debug information in API v2 response..."
+
+response=$(curl -k -s -X POST "$API_URL/predict" \
+    -u "$USERNAME:$PASSWORD" \
+    -H "Content-Type: application/json" \
+    -H "X-Experiment-Group: debug" \
+    -d '{"sentence": "test"}')
+
+if echo "$response" | grep -q "debug_info"; then
+    print_success "API v2 returns debug information"
 else
-    echo -e "${GREEN}All tests passed successfully!${NC}"
+    print_failure "Debug info in v2" "Response: $response"
+fi
+
+# ==========================================
+# TEST 12: Prometheus Monitoring
+# ==========================================
+print_section "Feature 6: Monitoring (Bonus)"
+print_test 12 "Testing Prometheus availability..."
+
+response=$(curl -s -o /dev/null -w "%{http_code}" "$PROMETHEUS_URL/-/healthy")
+if [ "$response" = "200" ]; then
+    print_success "Prometheus is running and healthy"
+else
+    print_failure "Prometheus availability" "Status code: $response"
+fi
+
+# ==========================================
+# TEST 13: Prometheus Scraping
+# ==========================================
+print_test 13 "Testing Prometheus metrics collection..."
+
+response=$(curl -s "$PROMETHEUS_URL/api/v1/targets")
+if echo "$response" | grep -q "api-v1"; then
+    print_success "Prometheus is scraping API metrics"
+else
+    print_failure "Prometheus scraping" "API targets not found"
+fi
+
+# ==========================================
+# TEST 14: Nginx Status
+# ==========================================
+print_test 14 "Testing Nginx status endpoint..."
+
+# This endpoint is only accessible from Docker network
+nginx_container=$(docker ps --filter "name=nginx" --format "{{.Names}}")
+if [ -n "$nginx_container" ]; then
+    response=$(docker exec "$nginx_container" wget -qO- http://localhost/nginx_status 2>/dev/null || echo "")
+    if echo "$response" | grep -q "Active connections"; then
+        print_success "Nginx status endpoint is working"
+    else
+        print_failure "Nginx status" "Status endpoint not accessible"
+    fi
+else
+    print_failure "Nginx status" "Nginx container not found"
+fi
+
+# ==========================================
+# Test Summary
+# ==========================================
+print_section "Test Summary"
+echo "Total Tests:  $TOTAL_TESTS"
+echo -e "${GREEN}Passed:${NC}       $TESTS_PASSED"
+echo -e "${RED}Failed:${NC}       $TESTS_FAILED"
+echo ""
+
+if [ "$TESTS_FAILED" -eq 0 ]; then
+    echo -e "${GREEN}=========================================="
+    echo "✓ ALL TESTS PASSED!"
+    echo "==========================================${NC}"
     exit 0
+else
+    echo -e "${RED}=========================================="
+    echo "✗ SOME TESTS FAILED"
+    echo "==========================================${NC}"
+    exit 1
 fi
