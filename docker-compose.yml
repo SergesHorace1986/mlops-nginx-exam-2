@@ -1,28 +1,161 @@
 services:
+  # Nginx - Reverse Proxy and Load Balancer
+  nginx:
+    build:
+      context: ./deployments/nginx
+      dockerfile: Dockerfile
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - sentiment-network
+    depends_on:
+      - api-v1-1
+      - api-v1-2
+      - api-v1-3
+      - api-v2
+    restart: unless-stopped
+    volumes:
+      - nginx-logs:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # API v1 - Instance 1 (for load balancing)
+  api-v1-1:
+    build:
+      context: ./src/api
+      dockerfile: v1/Dockerfile
+    container_name: api-v1-1
+    environment:
+      - MODEL_PATH=/app/models/model.joblib
+    networks:
+      - sentiment-network
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # API v1 - Instance 2 (for load balancing)
+  api-v1-2:
+    build:
+      context: ./src/api
+      dockerfile: v1/Dockerfile
+    container_name: api-v1-2
+    environment:
+      - MODEL_PATH=/app/models/model.joblib
+    networks:
+      - sentiment-network
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # API v1 - Instance 3 (for load balancing)
+  api-v1-3:
+    build:
+      context: ./src/api
+      dockerfile: v1/Dockerfile
+    container_name: api-v1-3
+    environment:
+      - MODEL_PATH=/app/models/model.joblib
+    networks:
+      - sentiment-network
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # API v2 - Debug Version (for A/B testing)
+  api-v2:
+    build:
+      context: ./src/api
+      dockerfile: v2/Dockerfile
+    container_name: api-v2
+    environment:
+      - MODEL_PATH=/app/models/model.joblib
+    networks:
+      - sentiment-network
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Prometheus - Monitoring
   prometheus:
     image: prom/prometheus:latest
-    container_name: prometheus_server
+    container_name: prometheus
     ports:
       - "9090:9090"
+    networks:
+      - sentiment-network
     volumes:
       - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    depends_on:
-      - nginx
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # Grafana - Visualization (Bonus)
   grafana:
     image: grafana/grafana:latest
-    container_name: grafana_dashboard
+    container_name: grafana
     ports:
       - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
+    networks:
+      - sentiment-network
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  sentiment-network:
+    driver: bridge
 
 volumes:
-  prometheus_data:
-  grafana_data:
+  nginx-logs:
+  prometheus-data:
+  grafana-data:
